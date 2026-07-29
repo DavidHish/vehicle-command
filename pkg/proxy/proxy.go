@@ -37,6 +37,34 @@ const (
 
 var h2Prefix = "h2=https://"
 
+// httpDoer is the subset of *http.Client used by forwardRequest. Interface extracted to facilitate
+// testing.
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// vehicleSession is the subset of *vehicle.Vehicle used by handleVehicleCommand. Interface
+// extracted to facilitate testing.
+type vehicleSession interface {
+	Connect(ctx context.Context) error
+	Disconnect()
+	StartSession(ctx context.Context) error
+	UpdateCachedSessions(c *cache.SessionCache) error
+	Execute(command func(*vehicle.Vehicle) error) error
+}
+
+type liveVehicle struct {
+	*vehicle.Vehicle
+}
+
+func (v *liveVehicle) StartSession(ctx context.Context) error {
+	return v.Vehicle.StartSession(ctx, nil)
+}
+
+func (v *liveVehicle) Execute(command func(*vehicle.Vehicle) error) error {
+	return command(v.Vehicle)
+}
+
 func getAccount(req *http.Request) (*account.Account, error) {
 	token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if !ok {
@@ -54,6 +82,10 @@ type Proxy struct {
 	vinLock          sync.Map
 	unsupported      sync.Map
 	domainForSubject sync.Map
+
+	// client and fetchVehicle are overridable for tests.
+	client       httpDoer
+	fetchVehicle func(ctx context.Context, acct *account.Account, vin string) (vehicleSession, error)
 }
 
 func (p *Proxy) updateDomainForSubject(subject, domain string) {
@@ -111,11 +143,25 @@ func (p *Proxy) unlockVIN(vin string) {
 // Vehicles must have the public part of skey enrolled on their keychains. (This is a
 // command-authentication key, not a TLS key.)
 func New(_ context.Context, skey protocol.ECDHPrivateKey, cacheSize int) (*Proxy, error) {
-	return &Proxy{
+	p := &Proxy{
 		Timeout:    DefaultTimeout,
 		commandKey: skey,
 		sessions:   cache.New(cacheSize),
-	}, nil
+		client:     &http.Client{},
+	}
+	p.fetchVehicle = p.defaultFetchVehicle
+	return p, nil
+}
+
+func (p *Proxy) defaultFetchVehicle(ctx context.Context, acct *account.Account, vin string) (vehicleSession, error) {
+	car, err := acct.GetVehicle(ctx, vin, p.commandKey, p.sessions)
+	if err != nil {
+		return nil, err
+	}
+	if car == nil {
+		return nil, nil
+	}
+	return &liveVehicle{Vehicle: car}, nil
 }
 
 // Response contains a server's response to a client request.
@@ -219,8 +265,7 @@ func (p *Proxy) forwardRequest(acct *account.Account, w http.ResponseWriter, req
 	for {
 		proxyReq.URL.Host = acct.Host
 		log.Debug("Forwarding request to %s", proxyReq.URL.String())
-		client := http.Client{}
-		result, err := client.Do(proxyReq)
+		result, err := p.client.Do(proxyReq)
 
 		if err != nil {
 			if urlErr, ok := err.(*url.Error); ok && urlErr.Timeout() {
@@ -420,7 +465,7 @@ func (p *Proxy) handleVehicleCommand(acct *account.Account, w http.ResponseWrite
 	}
 	defer car.Disconnect()
 
-	if err := car.StartSession(ctx, nil); errors.Is(err, protocol.ErrProtocolNotSupported) {
+	if err := car.StartSession(ctx); errors.Is(err, protocol.ErrProtocolNotSupported) {
 		p.markUnsupportedVIN(vin)
 		p.forwardRequest(acct, w, req)
 		return err
@@ -432,7 +477,7 @@ func (p *Proxy) handleVehicleCommand(acct *account.Account, w http.ResponseWrite
 		_ = car.UpdateCachedSessions(p.sessions)
 	}()
 
-	if err = commandToExecuteFunc(car); err == ErrCommandUseRESTAPI {
+	if err = car.Execute(commandToExecuteFunc); err == ErrCommandUseRESTAPI {
 		return err
 	}
 	if protocol.IsNominalError(err) {
@@ -451,7 +496,7 @@ func (p *Proxy) handleVehicleCommand(acct *account.Account, w http.ResponseWrite
 }
 
 func (p *Proxy) loadVehicleAndCommandFromRequest(ctx context.Context, acct *account.Account, w http.ResponseWriter, req *http.Request,
-	command, vin string) (*vehicle.Vehicle, func(*vehicle.Vehicle) error, error) {
+	command, vin string) (vehicleSession, func(*vehicle.Vehicle) error, error) {
 
 	log.Debug("Executing %s on %s", command, vin)
 	if req.Method != http.MethodPost {
@@ -469,7 +514,7 @@ func (p *Proxy) loadVehicleAndCommandFromRequest(ctx context.Context, acct *acco
 		return nil, nil, err
 	}
 
-	car, err := acct.GetVehicle(ctx, vin, p.commandKey, p.sessions)
+	car, err := p.fetchVehicle(ctx, acct, vin)
 	if err != nil || car == nil {
 		if err == nil {
 			err = errors.New("vehicle not available")
