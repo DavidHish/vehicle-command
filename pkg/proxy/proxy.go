@@ -277,6 +277,7 @@ func (p *Proxy) forwardRequest(acct *account.Account, w http.ResponseWriter, req
 		attempts++
 		if attempts == MaxAttempts {
 			writeJSONError(w, http.StatusBadGateway, protocol.NewError("max retry exhausted", false, false))
+			return
 		}
 
 		log.Debug("Retrying transmission after error...")
@@ -460,17 +461,24 @@ func (p *Proxy) loadVehicleAndCommandFromRequest(ctx context.Context, acct *acco
 
 	commandToExecuteFunc, err := extractCommandAction(ctx, req, command)
 	if err != nil {
+		if errors.Is(err, ErrCommandUseRESTAPI) {
+			// Let ServeHTTP fall back to forwarding the original request.
+			return nil, nil, err
+		}
 		writeJSONError(w, http.StatusBadRequest, err)
 		return nil, nil, err
 	}
 
 	car, err := acct.GetVehicle(ctx, vin, p.commandKey, p.sessions)
 	if err != nil || car == nil {
+		if err == nil {
+			err = errors.New("vehicle not available")
+		}
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return nil, nil, err
 	}
 
-	return car, commandToExecuteFunc, err
+	return car, commandToExecuteFunc, nil
 }
 
 func extractCommandAction(ctx context.Context, req *http.Request, command string) (func(*vehicle.Vehicle) error, error) {
@@ -479,6 +487,9 @@ func extractCommandAction(ctx context.Context, req *http.Request, command string
 	if err != nil {
 		return nil, &inet.HTTPError{Code: http.StatusBadRequest, Message: "could not read request body"}
 	}
+	// Restore the body so fallbacks that forward the request (REST API / unsupported protocol)
+	// still have the original payload.
+	req.Body = io.NopCloser(bytes.NewReader(body))
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &params); err != nil {
 			return nil, &inet.HTTPError{Code: http.StatusBadRequest, Message: "error occurred while parsing request parameters"}
