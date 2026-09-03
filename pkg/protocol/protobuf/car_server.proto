@@ -59,6 +59,9 @@ message VehicleAction {
         AutoSeatClimateAction autoSeatClimateAction = 48;
         HvacSeatCoolerActions hvacSeatCoolerActions = 49;
         SetCabinOverheatProtectionAction setCabinOverheatProtectionAction = 50;
+        // ---- NOT FROM TESLA: Together navigation extension. See NavigationGpsRequest below. ----
+        NavigationGpsRequest navigationGpsRequest = 53;
+        // ---- end Together extension ----
         SetVehicleNameAction setVehicleNameAction = 54;
         ChargePortDoorClose chargePortDoorClose = 61;
         ChargePortDoorOpen chargePortDoorOpen = 62;
@@ -84,6 +87,41 @@ message VehicleAction {
         SetKeepAccessoryPowerModeAction setKeepAccessoryPowerModeAction = 138;
     }
 }
+
+// ---------------------------------------------------------------------------
+// NOT FROM TESLA. Together navigation extension.
+//
+// Tesla documents the `navigation_gps_request` Fleet API endpoint ("Start
+// navigation to given coordinates. Order can be used to specify order of
+// multiple stops.") but does not publish the corresponding signed protobuf
+// action, so this definition is not upstream and cannot be.
+//
+// PROVENANCE: field numbering and shape taken from Teslemetry/tesla-protocol,
+// which marks it as a community extension derived from observation of Tesla's
+// mobile application rather than from any Tesla source. Tag 53 is unused in
+// Tesla's published VehicleAction oneof, which is consistent with it having
+// been stripped before publication, and is NOT proof the tag is correct.
+//
+// UNVERIFIED, and treat every part of it as such until a real vehicle acts on
+// it. A sibling message in the same third-party source shipped with the wrong
+// tag and the car silently no-opped it while still returning success. The enum
+// numbering below is disputed by its own publisher, whose notes say app-side
+// evidence numbers these one lower throughout (Replace=0, Prepend=1,
+// Append=2). The bridge therefore sends `order` as a raw integer so both
+// numberings can be tested without recompiling this file.
+// ---------------------------------------------------------------------------
+message NavigationGpsRequest {
+    enum RemoteNavTripOrder {
+        REMOTE_NAV_TRIP_ORDER_UNKNOWN = 0;
+        REMOTE_NAV_TRIP_ORDER_REPLACE = 1;
+        REMOTE_NAV_TRIP_ORDER_PREPEND = 2;
+        REMOTE_NAV_TRIP_ORDER_APPEND = 3;
+    }
+    double lat = 1;
+    double lon = 2;
+    RemoteNavTripOrder order = 3;
+}
+// ---- end Together extension ----
 
 message GetVehicleData {
     GetChargeState getChargeState = 2;
