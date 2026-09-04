@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	carserver "github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func action(lat, lon float64, order TripOrder) *carserver.Action {
@@ -110,5 +112,51 @@ func TestExistingActionTagsAreUndisturbed(t *testing.T) {
 	// setVehicleNameAction is field 54: 54<<3|2 = 434 -> varint 0xB2 0x03.
 	if !bytes.Contains(encoded, []byte{0xB2, 0x03}) {
 		t.Fatalf("upstream action 54 moved; bytes = %x", encoded)
+	}
+}
+
+// The whole point of NavigateToCoordinatesAt is that a hand-written field is
+// indistinguishable on the wire from a declared one. If that stopped being
+// true, the field sweep would be testing nothing.
+func TestOrderAtAnArbitraryFieldIsOnTheWire(t *testing.T) {
+	for _, field := range []int{4, 5, 6, 7} {
+		req := &carserver.NavigationGpsRequest{Lat: 1, Lon: 2}
+		raw := protowire.AppendTag(nil, protowire.Number(field), protowire.VarintType)
+		raw = protowire.AppendVarint(raw, uint64(3))
+		req.ProtoReflect().SetUnknown(protoreflect.RawFields(raw))
+
+		encoded, err := proto.Marshal(req)
+		if err != nil {
+			t.Fatalf("field %d: marshal: %v", field, err)
+		}
+		if !bytes.Contains(encoded, raw) {
+			t.Fatalf("field %d: the hand-written field did not reach the wire; bytes = %x", field, encoded)
+		}
+		// And the declared fields must survive alongside it.
+		var back carserver.NavigationGpsRequest
+		if err := proto.Unmarshal(encoded, &back); err != nil {
+			t.Fatalf("field %d: unmarshal: %v", field, err)
+		}
+		if back.Lat != 1 || back.Lon != 2 {
+			t.Fatalf("field %d: coordinates disturbed: %v,%v", field, back.Lat, back.Lon)
+		}
+	}
+}
+
+// Field 3 must still go through the generated setter, or the sweep's baseline
+// would differ from what every previous send actually put on the wire.
+func TestDefaultFieldStillUsesTheDeclaredOrder(t *testing.T) {
+	req := &carserver.NavigationGpsRequest{
+		Lat:   1,
+		Lon:   2,
+		Order: carserver.NavigationGpsRequest_REMOTE_NAV_TRIP_ORDER_APPEND,
+	}
+	encoded, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Field 3, varint: 3<<3|0 = 24 (0x18), value 3.
+	if !bytes.Contains(encoded, []byte{0x18, 0x03}) {
+		t.Fatalf("declared order field missing; bytes = %x", encoded)
 	}
 }
