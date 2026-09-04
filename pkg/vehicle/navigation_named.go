@@ -10,8 +10,11 @@ package vehicle
 
 import (
 	"context"
+	"fmt"
 
 	carserver "github.com/teslamotors/vehicle-command/pkg/protocol/protobuf/carserver"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // NavigateToNamedCoordinates sends an exact coordinate together with a name.
@@ -37,16 +40,69 @@ func (v *Vehicle) NavigateToNamedCoordinates(
 	name string,
 	order TripOrder,
 ) error {
+	return v.NavigateToNamedCoordinatesAt(ctx, lat, lon, name, order, NamedOrderField)
+}
+
+// NamedOrderField is where the published layout puts this message's order.
+//
+// Note it is 4, not 3. NavigationGpsRequest carries lat, lon, order — order at
+// 3. This message carries lat, lon, destination, order — order at 4, pushed
+// along by the name. A field sweep done against the other message therefore
+// says nothing whatsoever about this one, which is easy to miss and was.
+const NamedOrderField = 4
+
+// NavigateToNamedCoordinatesAt is NavigateToNamedCoordinates with the order
+// carried at a chosen protobuf field number.
+//
+// This exists because of a confirmed observation and an unanswered question.
+//
+// CONFIRMED, on a real Model 3 on 2026.26.6: this message DISPLAYS its name.
+// Sent with a custom label, the touchscreen showed that label rather than an
+// address or a plus code. As far as the public record goes that had never been
+// established by anyone — every previous test of this message read the HTTP
+// acknowledgement and nobody looked at the screen.
+//
+// UNANSWERED: whether its order does anything. Sent one point at a time, each
+// replaced the last, exactly as the single-destination message does. That is
+// either an inert order field or an order value at a field the car does not
+// read — indistinguishable from outside, since protobuf discards an unknown
+// field in silence.
+//
+// The prize for answering it is the whole feature: exact coordinates AND the
+// names somebody chose AND a multi-stop route, which no other message in the
+// schema can offer together. So the field number is a parameter, written into
+// the message's unknown-fields region exactly as protoc-gen-go would emit a
+// declared one.
+func (v *Vehicle) NavigateToNamedCoordinatesAt(
+	ctx context.Context,
+	lat, lon float64,
+	name string,
+	order TripOrder,
+	orderField int,
+) error {
+	if orderField < 1 || orderField > 536870911 {
+		return fmt.Errorf("order field number %d is not a valid protobuf field", orderField)
+	}
+
+	req := &carserver.NavigationGpsDestinationRequest{
+		Lat:         lat,
+		Lon:         lon,
+		Destination: name,
+	}
+
+	if orderField == NamedOrderField {
+		req.Order = carserver.NavigationGpsDestinationRequest_RemoteNavTripOrder(order)
+	} else {
+		raw := protowire.AppendTag(nil, protowire.Number(orderField), protowire.VarintType)
+		raw = protowire.AppendVarint(raw, uint64(order))
+		req.ProtoReflect().SetUnknown(protoreflect.RawFields(raw))
+	}
+
 	return v.executeCarServerAction(ctx,
 		&carserver.Action_VehicleAction{
 			VehicleAction: &carserver.VehicleAction{
 				VehicleActionMsg: &carserver.VehicleAction_NavigationGpsDestinationRequest{
-					NavigationGpsDestinationRequest: &carserver.NavigationGpsDestinationRequest{
-						Lat:         lat,
-						Lon:         lon,
-						Destination: name,
-						Order:       carserver.NavigationGpsDestinationRequest_RemoteNavTripOrder(order),
-					},
+					NavigationGpsDestinationRequest: req,
 				},
 			},
 		})
