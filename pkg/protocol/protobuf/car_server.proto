@@ -74,6 +74,7 @@ message VehicleAction {
         VehicleControlResetPinToDriveAdminAction vehicleControlResetPinToDriveAdminAction = 89;
         // ---- NOT FROM TESLA: Together navigation extension. ----
         NavigationWaypointsRequest navigationWaypointsRequest = 90;
+        NavigationGpsDestinationRequest navigationGpsDestinationRequest = 106;
         // ---- end Together extension ----
         ChargeSchedule addChargeScheduleAction = 97;
         RemoveChargeScheduleAction removeChargeScheduleAction = 98;
@@ -156,6 +157,43 @@ message NavigationWaypointsRequest {
     }
     string waypoints = 1;
     TripPlanOptions trip_plan_options = 2;
+}
+// ---------------------------------------------------------------------------
+// NOT FROM TESLA. Together navigation extension.
+//
+// The only message in the whole schema that pairs an EXACT COORDINATE with a
+// free-text name. Every other route to a friendly label goes through a Google
+// place id, and a place id carries its own position — which relocated a school
+// pin off the drop-off lane and onto the wrong side of the building. Position
+// is what this feature is for, so a message with lat, lon AND a name is worth
+// testing even though nothing about it is confirmed.
+//
+// UNVERIFIED, in a specific way worth stating: this has been sent to a real car
+// and acknowledged, but nobody has ever reported whether `destination` reaches
+// the screen. It is equally consistent with being a display name and with being
+// a geocoding hint the car uses and discards. Only looking at the touchscreen
+// settles it.
+//
+// The `order` enum is the same shape as NavigationGpsRequest's, which on a real
+// car had no observable effect at any value or field number. Expect the same
+// here until proven otherwise; if it holds, this message is single-destination
+// and the multi-stop path stays with tag 90.
+//
+// PROVENANCE: tag 106 and the field layout come from Teslemetry's
+// reverse-engineered schema, derived from Tesla's mobile app rather than from
+// Tesla. Tag 106 is unallocated in Tesla's published oneof.
+// ---------------------------------------------------------------------------
+message NavigationGpsDestinationRequest {
+    enum RemoteNavTripOrder {
+        REMOTE_NAV_TRIP_ORDER_UNKNOWN = 0;
+        REMOTE_NAV_TRIP_ORDER_REPLACE = 1;
+        REMOTE_NAV_TRIP_ORDER_PREPEND = 2;
+        REMOTE_NAV_TRIP_ORDER_APPEND = 3;
+    }
+    double lat = 1;
+    double lon = 2;
+    string destination = 3;
+    RemoteNavTripOrder order = 4;
 }
 // ---- end Together extension ----
 

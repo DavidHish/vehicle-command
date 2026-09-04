@@ -86,3 +86,50 @@ func TestGpsRequestSurvivesTheWaypointsAddition(t *testing.T) {
 		t.Fatalf("field 53 moved; bytes = %x", encoded)
 	}
 }
+
+// Tag 106 is the only message pairing an exact coordinate with a name, so if it
+// ever moves, the one path that could give us both silently stops working.
+func TestNamedDestinationUsesFieldOneHundredSix(t *testing.T) {
+	req := &carserver.Action{ActionMsg: &carserver.Action_VehicleAction{
+		VehicleAction: &carserver.VehicleAction{
+			VehicleActionMsg: &carserver.VehicleAction_NavigationGpsDestinationRequest{
+				NavigationGpsDestinationRequest: &carserver.NavigationGpsDestinationRequest{
+					Lat: 38.907235, Lon: -77.036912, Destination: "Oakwood School",
+				},
+			},
+		},
+	}}
+	encoded, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// 106<<3|2 = 850, which encodes as the varint 0xD2 0x06.
+	if !bytes.Contains(encoded, []byte{0xD2, 0x06}) {
+		t.Fatalf("action does not carry field 106; bytes = %x", encoded)
+	}
+	// The name must reach the wire verbatim; that is the entire hypothesis.
+	if !bytes.Contains(encoded, []byte("Oakwood School")) {
+		t.Fatalf("the destination name did not reach the wire; bytes = %x", encoded)
+	}
+}
+
+// The coordinates must survive at the precision the editor stores, or the
+// message solves the naming problem by reintroducing the position problem.
+func TestNamedDestinationKeepsExactCoordinates(t *testing.T) {
+	const lat, lon = 38.907235, -77.036912
+	req := &carserver.NavigationGpsDestinationRequest{Lat: lat, Lon: lon, Destination: "x"}
+	encoded, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back carserver.NavigationGpsDestinationRequest
+	if err := proto.Unmarshal(encoded, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Lat != lat || back.Lon != lon {
+		t.Fatalf("coordinates changed: got %v,%v", back.Lat, back.Lon)
+	}
+	if back.Destination != "x" {
+		t.Fatalf("name changed: got %q", back.Destination)
+	}
+}
