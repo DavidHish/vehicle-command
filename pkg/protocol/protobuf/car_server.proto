@@ -72,6 +72,9 @@ message VehicleAction {
         VehicleControlResetPinToDriveAction vehicleControlResetPinToDriveAction = 78;
         DrivingClearSpeedLimitPinAdminAction drivingClearSpeedLimitPinAdminAction = 79;
         VehicleControlResetPinToDriveAdminAction vehicleControlResetPinToDriveAdminAction = 89;
+        // ---- NOT FROM TESLA: Together navigation extension. ----
+        NavigationWaypointsRequest navigationWaypointsRequest = 90;
+        // ---- end Together extension ----
         ChargeSchedule addChargeScheduleAction = 97;
         RemoveChargeScheduleAction removeChargeScheduleAction = 98;
         PreconditionSchedule addPreconditionScheduleAction = 99;
@@ -120,6 +123,39 @@ message NavigationGpsRequest {
     double lat = 1;
     double lon = 2;
     RemoteNavTripOrder order = 3;
+}
+// ---------------------------------------------------------------------------
+// NOT FROM TESLA. Together navigation extension.
+//
+// This is the MULTI-STOP command. Unlike NavigationGpsRequest, which carries a
+// single destination and whose every send simply overwrites the last, this
+// carries the whole ordered trip in one call. That distinction is not a detail:
+// it is why sending five gps requests produced five destinations in a row
+// rather than a route, and why the order enum on that message never appeared to
+// do anything.
+//
+// Tesla's own mobile application does multi-stop this way (Locations, Navigate,
+// Edit Trip, Add Stop, Send to Car). A Tesla engineer reviewing the community
+// pull request that proposed this message asked only for the fields to be
+// "rearranged to match internal order" and pasted Tesla's own layout — which
+// confirms the SHAPE of the message while confirming nothing about its
+// behaviour. Field NUMBERS decide the wire format, not declaration order, so
+// this ordering is faithful.
+//
+// `waypoints` is a single comma-separated string. The one published format is
+// `refId:<Google Place ID>` per stop, last entry being the final destination.
+// Whether it also accepts coordinates is UNRESOLVED: a widely repeated claim
+// that bare coordinates are silently discarded could not be traced to any
+// primary source, so we intend to find out ourselves rather than inherit it.
+// The bridge therefore sends this string verbatim from the caller.
+// ---------------------------------------------------------------------------
+message NavigationWaypointsRequest {
+    message TripPlanOptions {
+        int32 destination_start_soe = 1;
+        int32 destination_arrival_soe = 2;
+    }
+    string waypoints = 1;
+    TripPlanOptions trip_plan_options = 2;
 }
 // ---- end Together extension ----
 
